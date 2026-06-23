@@ -179,7 +179,7 @@ function emitError(socketId: string, message: string) {
 }
 
 function generateRoomCode() {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const alphabet = "0123456789";
 
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const code = Array.from({ length: 5 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
@@ -193,8 +193,9 @@ function generateRoomCode() {
 
 function normalizeQuizRequest(body: unknown) {
   const source = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
-  const topic = cleanText(source.topic, "Travel").slice(0, 40);
+  const topic = cleanText(source.topic, "Travel").slice(0, 200);
   const difficulty = cleanText(source.difficulty, "Easy").slice(0, 20);
+  const additionalPrompt = cleanText(source.additionalPrompt, "").slice(0, 500);
   const count = Math.min(Math.max(Number(source.questions) || 5, 3), 15);
   const rawTypes = Array.isArray(source.types) ? source.types : ["mcq", "unscramble"];
   const types = rawTypes
@@ -204,6 +205,7 @@ function normalizeQuizRequest(body: unknown) {
   return {
     topic,
     difficulty,
+    additionalPrompt,
     questions: count,
     types: types.length ? types : (["mcq", "unscramble"] as QuizQuestion["type"][])
   };
@@ -333,11 +335,12 @@ async function generateQuizWithGemini(request: ReturnType<typeof normalizeQuizRe
     `Generate ${request.questions} English OPIC practice quiz questions.`,
     `Topic: ${request.topic}`,
     `Difficulty: ${request.difficulty}`,
+    request.additionalPrompt ? `Additional Instructions: ${request.additionalPrompt}` : "",
     `Allowed types: ${request.types.join(", ")}`,
     "Return JSON only with this shape:",
     "{\"title\":\"string\",\"questions\":[{\"type\":\"mcq\",\"question\":\"string\",\"options\":[\"A\",\"B\",\"C\",\"D\"],\"answer\":\"string\"},{\"type\":\"unscramble\",\"question\":\"scrambled letters\",\"answer\":\"word\"}]}",
     "Rules: MCQ answer must exactly match one option. Unscramble question must be scrambled lowercase letters only. Keep questions short and classroom friendly."
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 
   const response = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions", {
     method: "POST",
@@ -674,6 +677,61 @@ io.on("connection", (socket) => {
     });
     io.to(room.code).emit("room-reset", { roomCode: room.code });
     emitPlayerList(room);
+  });
+
+  socket.on("change-quiz", ({ roomCode, quiz }: { roomCode: string; quiz: any }) => {
+    const code = roomCode?.trim().toUpperCase();
+    const room = rooms.get(code);
+
+    if (!room) {
+      emitError(socket.id, "Room not found.");
+      return;
+    }
+
+    if (socket.id !== room.hostSocketId) {
+      emitError(socket.id, "Only the host can change the quiz.");
+      return;
+    }
+
+    if (!quiz || !quiz.questions || quiz.questions.length === 0) {
+      emitError(socket.id, "Invalid quiz data.");
+      return;
+    }
+
+    clearRoomTimers(room);
+    room.status = "waiting";
+    room.currentQuestion = 0;
+    room.submissions.clear();
+    room.quiz = quiz; // Assign the new quiz
+    [...room.players.values()].forEach((player) => {
+      player.score = 0;
+    });
+    io.to(room.code).emit("room-reset", { roomCode: room.code });
+    emitPlayerList(room);
+  });
+
+  socket.on("leave-room", () => {
+    for (const room of rooms.values()) {
+      if (room.players.has(socket.id)) {
+        room.players.delete(socket.id);
+        socket.leave(room.code);
+
+        if (socket.id === room.hostSocketId) {
+          const nextHost = [...room.players.values()].find((candidate) => candidate.connected);
+          if (nextHost) {
+            room.hostSocketId = nextHost.id;
+          }
+        }
+        
+        emitPlayerList(room);
+
+        // Optional cleanup: if room is empty
+        if (room.players.size === 0) {
+          clearRoomTimers(room);
+          rooms.delete(room.code);
+        }
+      }
+    }
   });
 
   socket.on("disconnect", () => {
