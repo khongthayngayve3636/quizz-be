@@ -46,7 +46,8 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
       score: 0,
       connected: true,
       isReady: true,
-      wrongAttempts: 0
+      wrongAttempts: 0,
+      streak: 0
     });
     rooms.set(code, room);
     socket.join(code);
@@ -163,7 +164,8 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
       score: 0,
       connected: true,
       isReady: false,
-      wrongAttempts: 0
+      wrongAttempts: 0,
+      streak: 0
     });
     socket.join(code);
 
@@ -205,6 +207,7 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
       player.score = 0;
       player.connected = true;
       player.wrongAttempts = 0;
+      player.streak = 0;
     });
     startQuestionCountdown(room);
   });
@@ -241,9 +244,16 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
       return;
     }
 
+    if (correct) {
+      player.streak += 1;
+    } else if (question.type !== "unscramble") {
+      player.streak = 0;
+    }
+
     const basePoints = scoreFor(correct, elapsedSeconds);
+    const multiplier = player.streak > 1 ? 1 + (player.streak - 1) * 0.1 : 1;
     const penalty = player.wrongAttempts * 20;
-    const points = correct ? Math.max(0, basePoints - penalty) : 0;
+    const points = correct ? Math.max(0, Math.floor(basePoints * multiplier) - penalty) : 0;
     
     player.score += points;
 
@@ -252,6 +262,7 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
       answer,
       correct,
       points,
+      streak: player.streak,
       submittedAt: Date.now()
     };
     room.submissions.set(socket.id, submission);
@@ -285,6 +296,7 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
     room.submissions.clear();
     [...room.players.values()].forEach((player) => {
       player.score = 0;
+      player.streak = 0;
       if (player.id !== room.hostSocketId) {
         player.isReady = false;
       }
@@ -411,5 +423,51 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
         deleteRoom(room);
       }
     }
+  });
+
+  socket.on("chat-message", ({ roomCode, message }: { roomCode: string; message: string }) => {
+    const code = roomCode?.trim().toUpperCase();
+    const room = rooms.get(code);
+    if (!room || !message?.trim()) return;
+
+    const player = room.players.get(socket.id);
+    if (!player) return;
+
+    io.to(code).emit("chat-message", {
+      playerId: socket.id,
+      name: player.name,
+      message: message.trim(),
+      timestamp: Date.now()
+    });
+  });
+
+  socket.on("send-emote", ({ roomCode, emote }: { roomCode: string; emote: string }) => {
+    const code = roomCode?.trim().toUpperCase();
+    const room = rooms.get(code);
+    if (!room || !emote) return;
+
+    const player = room.players.get(socket.id);
+    if (!player) return;
+
+    io.to(code).emit("receive-emote", {
+      playerId: socket.id,
+      name: player.name,
+      emote
+    });
+  });
+
+  socket.on("end-game-early", ({ roomCode }: { roomCode: string }) => {
+    const code = roomCode?.trim().toUpperCase();
+    const room = rooms.get(code);
+    if (!room) return;
+
+    if (socket.id !== room.hostSocketId) {
+      emitError(socket.id, "Only the host can end the game.");
+      return;
+    }
+
+    import("./roomManager.js").then(({ finishGame }) => {
+      finishGame(room);
+    });
   });
 }

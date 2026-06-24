@@ -11,6 +11,7 @@ export type Player = {
   connected: boolean;
   isReady: boolean;
   wrongAttempts: number;
+  streak: number;
 };
 
 export type Submission = {
@@ -18,6 +19,7 @@ export type Submission = {
   answer: string;
   correct: boolean;
   points: number;
+  streak: number;
   submittedAt: number;
 };
 

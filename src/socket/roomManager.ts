@@ -128,6 +128,12 @@ export function finishQuestion(room: Room) {
   room.status = "result";
   const question = getCurrentQuestion(room);
 
+  for (const player of room.players.values()) {
+    if (!room.submissions.has(player.id)) {
+      player.streak = 0;
+    }
+  }
+
   io.to(room.code).emit("answer-result", {
     roomCode: room.code,
     correctAnswer: question.answer,
