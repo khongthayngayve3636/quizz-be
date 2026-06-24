@@ -20,7 +20,8 @@ export function leaderboard(room: Room) {
       icon: player.icon,
       score: player.score,
       connected: player.connected,
-      isHost: player.id === room.hostSocketId
+      isHost: player.id === room.hostSocketId,
+      isReady: player.isReady
     }))
     .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
 }
@@ -32,7 +33,8 @@ export function lobbyPlayers(room: Room) {
     icon: player.icon,
     score: player.score,
     connected: player.connected,
-    isHost: player.id === room.hostSocketId
+    isHost: player.id === room.hostSocketId,
+    isReady: player.isReady
   }));
 }
 
@@ -42,6 +44,21 @@ export function emitPlayerList(room: Room) {
     players: lobbyPlayers(room),
     hostSocketId: room.hostSocketId
   });
+}
+
+export function startQuestionCountdown(room: Room) {
+  clearRoomTimers(room);
+  room.status = "countdown";
+  io.to(room.code).emit("countdown-start", {
+    roomCode: room.code,
+    seconds: 3
+  });
+
+  room.timers.push(
+    setTimeout(() => {
+      startQuestion(room);
+    }, 3000)
+  );
 }
 
 export function emitError(socketId: string, message: string) {
@@ -77,13 +94,20 @@ export function startQuestion(room: Room) {
   room.status = "question";
   room.submissions.clear();
   room.questionStartedAt = Date.now();
+  
+  [...room.players.values()].forEach((player) => {
+    player.wrongAttempts = 0;
+  });
 
   const question = getCurrentQuestion(room);
+  const durationSeconds = QUESTION_SECONDS + (question.type === "unscramble" ? 5 : 0);
+
   io.to(room.code).emit("question-start", {
     roomCode: room.code,
+    quizTitle: room.quizTitle,
     questionNumber: room.currentQuestion + 1,
     totalQuestions: room.quiz.length,
-    durationSeconds: QUESTION_SECONDS,
+    durationSeconds,
     startedAt: room.questionStartedAt,
     question: publicQuestion(question)
   });
@@ -91,7 +115,7 @@ export function startQuestion(room: Room) {
   room.timers.push(
     setTimeout(() => {
       finishQuestion(room);
-    }, QUESTION_SECONDS * 1000)
+    }, durationSeconds * 1000)
   );
 }
 
@@ -137,7 +161,7 @@ export function showLeaderboard(room: Room) {
       }
 
       room.currentQuestion += 1;
-      startQuestion(room);
+      startQuestionCountdown(room);
     }, LEADERBOARD_MS)
   );
 }

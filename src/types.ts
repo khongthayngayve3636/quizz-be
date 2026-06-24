@@ -1,13 +1,16 @@
 import { type QuizQuestion } from "./sampleQuiz.js";
 
-export type RoomStatus = "waiting" | "question" | "result" | "leaderboard" | "finished";
+export type RoomStatus = "waiting" | "countdown" | "question" | "result" | "leaderboard" | "finished";
 
 export type Player = {
   id: string;
+  sessionId: string;
   name: string;
   icon?: string;
   score: number;
   connected: boolean;
+  isReady: boolean;
+  wrongAttempts: number;
 };
 
 export type Submission = {
@@ -24,6 +27,7 @@ export type Room = {
   status: RoomStatus;
   currentQuestion: number;
   questionStartedAt: number;
+  quizTitle?: string;
   quiz: QuizQuestion[];
   players: Map<string, Player>;
   submissions: Map<string, Submission>;

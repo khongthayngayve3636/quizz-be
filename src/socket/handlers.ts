@@ -1,7 +1,7 @@
 import { Server, Socket } from "socket.io";
 import { sampleQuiz } from "../sampleQuiz.js";
 import { type Room, type Submission } from "../types.js";
-import { generateRoomCode, normalizeAnswer, scoreFor } from "../utils/helpers.js";
+import { generateRoomCode, normalizeAnswer, scoreFor, publicQuestion } from "../utils/helpers.js";
 import { validateClientQuiz } from "../utils/quizValidation.js";
 import {
   clearRoomTimers,
@@ -10,12 +10,13 @@ import {
   emitPlayerList,
   getCurrentQuestion,
   maybeFinishWhenAllAnswered,
-  startQuestion
+  startQuestionCountdown,
+  leaderboard
 } from "./roomManager.js";
 import { rooms } from "./store.js";
 
 export function registerSocketHandlers(io: Server, socket: Socket) {
-  socket.on("create-room", ({ name, icon, quiz }: { name: string; icon?: string; quiz?: unknown }) => {
+  socket.on("create-room", ({ name, icon, sessionId, quiz }: { name: string; icon?: string; sessionId?: string; quiz?: any }) => {
     const trimmedName = name?.trim();
     if (!trimmedName) {
       emitError(socket.id, "Please enter your name.");
@@ -29,6 +30,7 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
       status: "waiting",
       currentQuestion: 0,
       questionStartedAt: 0,
+      quizTitle: quiz?.title || "Untitled Quiz",
       quiz: validateClientQuiz(quiz) ?? sampleQuiz,
       players: new Map(),
       submissions: new Map(),
@@ -38,10 +40,13 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
 
     room.players.set(socket.id, {
       id: socket.id,
+      sessionId: sessionId || socket.id,
       name: trimmedName,
       icon,
       score: 0,
-      connected: true
+      connected: true,
+      isReady: true,
+      wrongAttempts: 0
     });
     rooms.set(code, room);
     socket.join(code);
@@ -54,7 +59,7 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
     emitPlayerList(room);
   });
 
-  socket.on("join-room", ({ name, icon, roomCode }: { name: string; icon?: string; roomCode: string }) => {
+  socket.on("join-room", ({ name, icon, sessionId, roomCode }: { name: string; icon?: string; sessionId?: string; roomCode: string }) => {
     const trimmedName = name?.trim();
     const code = roomCode?.trim().toUpperCase();
     const room = rooms.get(code);
@@ -69,13 +74,80 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
       return;
     }
 
+    if (sessionId) {
+      const existingPlayerEntry = [...room.players.entries()].find(([id, p]) => p.sessionId === sessionId);
+      if (existingPlayerEntry) {
+        const [oldSocketId, player] = existingPlayerEntry;
+        if (player.connected) {
+          emitError(socket.id, "Session already active.");
+          return;
+        }
+        
+        room.players.delete(oldSocketId);
+        player.id = socket.id;
+        player.connected = true;
+        if (icon) player.icon = icon;
+        player.name = trimmedName;
+        room.players.set(socket.id, player);
+        
+        if (room.hostSocketId === oldSocketId) {
+          room.hostSocketId = socket.id;
+        }
+        
+        const submission = room.submissions.get(oldSocketId);
+        if (submission) {
+          submission.playerId = socket.id;
+          room.submissions.delete(oldSocketId);
+          room.submissions.set(socket.id, submission);
+        }
+        
+        socket.join(code);
+        socket.emit("room-joined", { roomCode: code, playerId: socket.id, isHost: socket.id === room.hostSocketId });
+        emitPlayerList(room);
+        
+        if (room.status === "countdown") {
+          socket.emit("countdown-start", { roomCode: code, seconds: 3 });
+        } else if (room.status === "question") {
+          const question = getCurrentQuestion(room);
+          const durationSeconds = 15 + (question.type === "unscramble" ? 5 : 0);
+          socket.emit("question-start", {
+            roomCode: code,
+            quizTitle: room.quizTitle,
+            questionNumber: room.currentQuestion + 1,
+            totalQuestions: room.quiz.length,
+            durationSeconds,
+            startedAt: room.questionStartedAt,
+            question: publicQuestion(question)
+          });
+          if (room.submissions.has(socket.id)) {
+             const sub = room.submissions.get(socket.id)!;
+             socket.emit("answer-submitted", { roomCode: code, correct: sub.correct, points: sub.points });
+          }
+        } else if (room.status === "result") {
+          socket.emit("answer-result", {
+            roomCode: code,
+            correctAnswer: getCurrentQuestion(room).answer,
+            submissions: [...room.submissions.values()],
+            leaderboard: leaderboard(room)
+          });
+        } else if (room.status === "leaderboard") {
+          socket.emit("leaderboard-update", {
+            roomCode: code,
+            leaderboard: leaderboard(room),
+            nextQuestionInSeconds: room.currentQuestion >= room.quiz.length - 1 ? 0 : 3
+          });
+        }
+        return;
+      }
+    }
+
     if (room.status !== "waiting") {
       emitError(socket.id, "This game has already started.");
       return;
     }
 
     const nameExists = [...room.players.values()].some(
-      (player) => player.connected && player.name.trim().toLowerCase() === trimmedName.toLowerCase()
+      (player) => player.name.trim().toLowerCase() === trimmedName.toLowerCase()
     );
 
     if (nameExists) {
@@ -85,10 +157,13 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
 
     room.players.set(socket.id, {
       id: socket.id,
+      sessionId: sessionId || socket.id,
       name: trimmedName,
       icon,
       score: 0,
-      connected: true
+      connected: true,
+      isReady: false,
+      wrongAttempts: 0
     });
     socket.join(code);
 
@@ -119,12 +194,19 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
       return;
     }
 
+    const allReady = [...room.players.values()].every(p => p.isReady);
+    if (!allReady) {
+      emitError(socket.id, "All players must be ready before starting.");
+      return;
+    }
+
     room.currentQuestion = 0;
     [...room.players.values()].forEach((player) => {
       player.score = 0;
       player.connected = true;
+      player.wrongAttempts = 0;
     });
-    startQuestion(room);
+    startQuestionCountdown(room);
   });
 
   socket.on("submit-answer", ({ roomCode, answer }: { roomCode: string; answer: string }) => {
@@ -149,7 +231,20 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
     const question = getCurrentQuestion(room);
     const elapsedSeconds = (Date.now() - room.questionStartedAt) / 1000;
     const correct = normalizeAnswer(answer) === normalizeAnswer(question.answer);
-    const points = scoreFor(correct, elapsedSeconds);
+    
+    if (question.type === "unscramble" && !correct) {
+      player.wrongAttempts += 1;
+      socket.emit("answer-wrong", {
+        roomCode: code,
+        message: "Wrong answer, try again! (-20 pts)"
+      });
+      return;
+    }
+
+    const basePoints = scoreFor(correct, elapsedSeconds);
+    const penalty = player.wrongAttempts * 20;
+    const points = correct ? Math.max(0, basePoints - penalty) : 0;
+    
     player.score += points;
 
     const submission: Submission = {
@@ -190,6 +285,9 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
     room.submissions.clear();
     [...room.players.values()].forEach((player) => {
       player.score = 0;
+      if (player.id !== room.hostSocketId) {
+        player.isReady = false;
+      }
     });
     io.to(room.code).emit("room-reset", { roomCode: room.code });
     emitPlayerList(room);
@@ -218,12 +316,51 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
     room.status = "waiting";
     room.currentQuestion = 0;
     room.submissions.clear();
-    room.quiz = quiz; // Assign the new quiz
+    room.quiz = validateClientQuiz(quiz) ?? sampleQuiz;
+    room.quizTitle = quiz?.title || "Untitled Quiz";
     [...room.players.values()].forEach((player) => {
       player.score = 0;
+      if (player.id !== room.hostSocketId) {
+        player.isReady = false;
+      }
     });
     io.to(room.code).emit("room-reset", { roomCode: room.code });
     emitPlayerList(room);
+  });
+
+  socket.on("toggle-ready", ({ roomCode }: { roomCode: string }) => {
+    const code = roomCode?.trim().toUpperCase();
+    const room = rooms.get(code);
+    if (!room) return;
+
+    const player = room.players.get(socket.id);
+    if (player && player.id !== room.hostSocketId) {
+      player.isReady = !player.isReady;
+      emitPlayerList(room);
+    }
+  });
+
+  socket.on("kick-player", ({ roomCode, targetId }: { roomCode: string, targetId: string }) => {
+    const code = roomCode?.trim().toUpperCase();
+    const room = rooms.get(code);
+    if (!room) return;
+
+    if (socket.id !== room.hostSocketId) {
+      emitError(socket.id, "Only the host can kick players.");
+      return;
+    }
+
+    if (room.players.has(targetId)) {
+      room.players.delete(targetId);
+      io.to(targetId).emit("kicked");
+      
+      const targetSocket = io.sockets.sockets.get(targetId);
+      if (targetSocket) {
+        targetSocket.leave(code);
+      }
+      
+      emitPlayerList(room);
+    }
   });
 
   socket.on("leave-room", () => {
