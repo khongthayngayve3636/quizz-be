@@ -55,7 +55,8 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
     socket.emit("room-created", {
       roomCode: code,
       playerId: socket.id,
-      isHost: true
+      isHost: true,
+      quizTitle: room.quizTitle
     });
     emitPlayerList(room);
   });
@@ -103,7 +104,7 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
         }
         
         socket.join(code);
-        socket.emit("room-joined", { roomCode: code, playerId: socket.id, isHost: socket.id === room.hostSocketId });
+        socket.emit("room-joined", { roomCode: code, playerId: socket.id, isHost: socket.id === room.hostSocketId, quizTitle: room.quizTitle });
         emitPlayerList(room);
         
         if (room.status === "countdown") {
@@ -172,7 +173,8 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
     socket.emit("room-joined", {
       roomCode: code,
       playerId: socket.id,
-      isHost: socket.id === room.hostSocketId
+      isHost: socket.id === room.hostSocketId,
+      quizTitle: room.quizTitle
     });
     emitPlayerList(room);
   });
