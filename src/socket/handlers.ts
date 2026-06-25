@@ -436,6 +436,7 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
     io.to(code).emit("chat-message", {
       playerId: socket.id,
       name: player.name,
+      icon: player.icon,
       message: message.trim(),
       timestamp: Date.now()
     });
