@@ -6,6 +6,7 @@ import { CLIENT_ORIGINS, PORT } from "./config.js";
 import { connectMongo } from "./db.js";
 import { initSocketServer } from "./socket/index.js";
 import { cleanupExpiredRooms } from "./socket/roomManager.js";
+import { logger } from "./utils/logger.js";
 
 const app = express();
 app.use(
@@ -22,8 +23,11 @@ app.use(
 );
 app.use(express.json());
 
+import { adminRoutes } from "./api/admin.js";
+
 // API Routes
 app.use(apiRoutes);
+app.use(adminRoutes);
 
 const httpServer = createServer(app);
 
@@ -35,11 +39,11 @@ async function startServer() {
     await connectMongo();
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown MongoDB error";
-    console.warn(`MongoDB connection failed: ${message}`);
+    logger.error(`MongoDB connection failed: ${message}`);
   }
 
   httpServer.listen(PORT, () => {
-    console.log(`OPIC Quiz Battle backend running on http://localhost:${PORT}`);
+    logger.info(`Server initialized and listening on port ${PORT}`);
   });
 }
 

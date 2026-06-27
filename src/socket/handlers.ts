@@ -3,6 +3,7 @@ import { sampleQuiz } from "../sampleQuiz.js";
 import { type Room, type Submission } from "../types.js";
 import { generateRoomCode, normalizeAnswer, scoreFor, publicQuestion } from "../utils/helpers.js";
 import { validateClientQuiz } from "../utils/quizValidation.js";
+import { logSystemEvent } from "../services/systemLogger.js";
 import {
   clearRoomTimers,
   deleteRoom,
@@ -59,6 +60,16 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
       quizTitle: room.quizTitle
     });
     emitPlayerList(room);
+
+    void logSystemEvent({
+      level: "info",
+      category: "room",
+      action: "ROOM_CREATED",
+      message: `Room ${code} created by host ${trimmedName} (Topic: ${room.quizTitle || "Unknown"})`,
+      actor: { type: "host", name: trimmedName, socketId: socket.id },
+      target: { type: "room", roomCode: code },
+      metadata: { quizTitle: room.quizTitle }
+    });
   });
 
   socket.on("join-room", ({ name, icon, sessionId, roomCode }: { name: string; icon?: string; sessionId?: string; roomCode: string }) => {
@@ -76,8 +87,8 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
       return;
     }
 
-    if (sessionId) {
-      const existingPlayerEntry = [...room.players.entries()].find(([id, p]) => p.sessionId === sessionId);
+    if (trimmedName) {
+      const existingPlayerEntry = [...room.players.entries()].find(([id, p]) => p.name.trim().toLowerCase() === trimmedName.toLowerCase());
       if (existingPlayerEntry) {
         const [oldSocketId, player] = existingPlayerEntry;
         if (player.connected) {
@@ -193,6 +204,11 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
       return;
     }
 
+    if (room.status !== "waiting") {
+      emitError(socket.id, "The game has already started.");
+      return;
+    }
+
     if (room.players.size === 0) {
       emitError(socket.id, "Add at least one player before starting.");
       return;
@@ -211,6 +227,17 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
       player.wrongAttempts = 0;
       player.streak = 0;
     });
+
+    void logSystemEvent({
+      level: "info",
+      category: "game",
+      action: "ROOM_START_GAME",
+      message: `Game started in room ${code} (Topic: ${room.quizTitle || "Unknown"}) with ${room.players.size} players. Hosted by ${room.hostSocketId ? ([...room.players.values()].find(p => p.id === room.hostSocketId)?.name || "Unknown") : "Unknown"}`,
+      actor: { type: "host", socketId: socket.id },
+      target: { type: "room", roomCode: code },
+      metadata: { quizTitle: room.quizTitle, playersCount: room.players.size }
+    });
+
     startQuestionCountdown(room);
   });
 
@@ -246,6 +273,8 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
       return;
     }
 
+    const previousStreak = player.streak;
+
     if (correct) {
       player.streak += 1;
     } else if (question.type !== "unscramble") {
@@ -265,6 +294,7 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
       correct,
       points,
       streak: player.streak,
+      previousStreak,
       submittedAt: Date.now()
     };
     room.submissions.set(socket.id, submission);
@@ -292,6 +322,11 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
       return;
     }
 
+    if (room.status !== "finished") {
+      emitError(socket.id, "The game is not finished yet.");
+      return;
+    }
+
     clearRoomTimers(room);
     room.status = "waiting";
     room.currentQuestion = 0;
@@ -303,7 +338,7 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
         player.isReady = false;
       }
     });
-    io.to(room.code).emit("room-reset", { roomCode: room.code });
+    io.to(room.code).emit("room-reset", { roomCode: room.code, quizTitle: room.quizTitle });
     emitPlayerList(room);
   });
 
@@ -318,6 +353,11 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
 
     if (socket.id !== room.hostSocketId) {
       emitError(socket.id, "Only the host can change the quiz.");
+      return;
+    }
+
+    if (room.status !== "waiting" && room.status !== "finished") {
+      emitError(socket.id, "Cannot change the quiz while a game is active.");
       return;
     }
 
@@ -338,7 +378,7 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
         player.isReady = false;
       }
     });
-    io.to(room.code).emit("room-reset", { roomCode: room.code });
+    io.to(room.code).emit("room-reset", { roomCode: room.code, quizTitle: room.quizTitle });
     emitPlayerList(room);
   });
 
@@ -391,7 +431,7 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
         }
         
         emitPlayerList(room);
-
+        
         // Optional cleanup: if room is empty
         if (room.players.size === 0) {
           clearRoomTimers(room);
@@ -422,7 +462,16 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
 
       const hasConnectedPlayers = [...room.players.values()].some((candidate) => candidate.connected);
       if (!hasConnectedPlayers) {
-        deleteRoom(room);
+        // Delay deletion to allow for quick refreshes
+        setTimeout(() => {
+          const checkRoom = rooms.get(room.code);
+          if (checkRoom) {
+            const stillEmpty = ![...checkRoom.players.values()].some((p) => p.connected);
+            if (stillEmpty) {
+              deleteRoom(checkRoom);
+            }
+          }
+        }, 5000);
       }
     }
   });

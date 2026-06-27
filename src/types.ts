@@ -20,6 +20,7 @@ export type Submission = {
   correct: boolean;
   points: number;
   streak: number;
+  previousStreak: number;
   submittedAt: number;
 };
 

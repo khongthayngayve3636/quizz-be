@@ -3,6 +3,8 @@ import { LEADERBOARD_MS, QUESTION_SECONDS, RESULT_MS, ROOM_TTL_MS } from "../con
 import { type Room } from "../types.js";
 import { publicQuestion } from "../utils/helpers.js";
 import { rooms } from "./store.js";
+import { StudentModel } from "../db.js";
+import { logSystemEvent } from "../services/systemLogger.js";
 
 // We need an instance of io to emit events from here, or pass it into functions.
 // To avoid circular dependency, we can inject `io` or set it once.
@@ -21,7 +23,8 @@ export function leaderboard(room: Room) {
       score: player.score,
       connected: player.connected,
       isHost: player.id === room.hostSocketId,
-      isReady: player.isReady
+      isReady: player.isReady,
+      streak: player.streak
     }))
     .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
 }
@@ -112,6 +115,8 @@ export function startQuestion(room: Room) {
     question: publicQuestion(question)
   });
 
+  // Removed verbose QUESTION_STARTED log
+
   room.timers.push(
     setTimeout(() => {
       finishQuestion(room);
@@ -172,13 +177,50 @@ export function showLeaderboard(room: Room) {
   );
 }
 
-export function finishGame(room: Room) {
+export async function finishGame(room: Room) {
+  if (room.status === "finished") {
+    return;
+  }
+
   clearRoomTimers(room);
   room.status = "finished";
   io.to(room.code).emit("game-over", {
     roomCode: room.code,
     leaderboard: leaderboard(room)
   });
+
+  void logSystemEvent({
+    level: "info",
+    category: "game",
+    action: "ROOM_GAME_OVER",
+    message: `Game over in room ${room.code} (Topic: ${room.quizTitle || "Unknown"}). Played by ${room.players.size} players. Hosted by ${room.hostSocketId ? ([...room.players.values()].find(p => p.id === room.hostSocketId)?.name || "Unknown") : "Unknown"}`,
+    target: { type: "room", roomCode: room.code }
+  });
+
+  try {
+    const bulkOps = [...room.players.values()].map(player => ({
+      updateOne: {
+        filter: { name: player.name },
+        update: { $inc: { score: player.score } },
+        upsert: true
+      }
+    }));
+    
+    if (bulkOps.length > 0) {
+      await StudentModel.bulkWrite(bulkOps);
+      // removed GLOBAL_SCORE_BULK_UPDATE_SUCCESS log
+    }
+  } catch (error: any) {
+    console.error("Failed to update global leaderboard:", error);
+    void logSystemEvent({
+      level: "error",
+      category: "leaderboard",
+      action: "GLOBAL_SCORE_BULK_UPDATE_FAILED",
+      message: `Failed to update global scores for room ${room.code}`,
+      target: { type: "room", roomCode: room.code },
+      metadata: { error: error.message }
+    });
+  }
 }
 
 export function maybeFinishWhenAllAnswered(room: Room) {
