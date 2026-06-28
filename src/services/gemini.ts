@@ -14,13 +14,15 @@ export function normalizeQuizRequest(body: unknown) {
   const types = rawTypes
     .map((type) => String(type))
     .filter((type): type is QuizQuestion["type"] => type === "mcq" || type === "unscramble");
+  const includeImages = source.includeImages === true;
 
   return {
     topic,
     difficulty,
     additionalPrompt,
     questions: count,
-    types: types.length ? types : (["mcq", "unscramble"] as QuizQuestion["type"][])
+    types: types.length ? types : (["mcq", "unscramble"] as QuizQuestion["type"][]),
+    includeImages
   };
 }
 
@@ -45,7 +47,17 @@ export function normalizeGeneratedQuiz(raw: unknown, request: ReturnType<typeof 
   const rawQuestions = Array.isArray(source.questions) ? source.questions : Array.isArray(raw) ? raw : [];
   const questions = rawQuestions.map(normalizeGeneratedQuestion).filter((question): question is QuizQuestion => Boolean(question));
 
-  if (questions.length < 1) {
+  const questionsWithImages = questions.map(q => {
+    if (q.imageKeyword) {
+      return {
+        ...q,
+        imageUrl: `https://image.pollinations.ai/prompt/${encodeURIComponent(q.imageKeyword)}?width=800&height=400&nologo=true`
+      };
+    }
+    return q;
+  });
+
+  if (questionsWithImages.length < 1) {
     throw new Error("Gemini returned no usable quiz questions.");
   }
 
@@ -53,7 +65,7 @@ export function normalizeGeneratedQuiz(raw: unknown, request: ReturnType<typeof 
     title: cleanText(source.title, `${request.topic} ${request.difficulty}`),
     topic: request.topic,
     difficulty: request.difficulty,
-    questions: questions.slice(0, request.questions)
+    questions: questionsWithImages.slice(0, request.questions)
   };
 }
 
@@ -89,14 +101,26 @@ export function getGeminiOutputText(data: Record<string, unknown>) {
 }
 
 export async function generateQuizWithGemini(request: ReturnType<typeof normalizeQuizRequest>) {
+  let imageInstructions = "";
+  if (request.includeImages) {
+    imageInstructions = "For ALL questions, generate a descriptive 'imageKeyword' field containing a highly detailed text-to-image prompt (e.g. 'a majestic lion in a dense green jungle, photorealistic').";
+  } else if (request.types.includes("unscramble")) {
+    imageInstructions = "For ONLY 'unscramble' type questions, generate a descriptive 'imageKeyword' field containing a highly detailed text-to-image prompt. Do NOT generate 'imageKeyword' for 'mcq' questions.";
+  }
+
+  const jsonShape = request.includeImages || request.types.includes("unscramble") 
+    ? "{\"title\":\"string\",\"questions\":[{\"type\":\"mcq\",\"question\":\"string\",\"options\":[\"A\",\"B\",\"C\",\"D\"],\"answer\":\"string\",\"imageKeyword\":\"string (optional)\"},{\"type\":\"unscramble\",\"question\":\"scrambled letters\",\"answer\":\"word\",\"imageKeyword\":\"string (optional)\"}]}"
+    : "{\"title\":\"string\",\"questions\":[{\"type\":\"mcq\",\"question\":\"string\",\"options\":[\"A\",\"B\",\"C\",\"D\"],\"answer\":\"string\"},{\"type\":\"unscramble\",\"question\":\"scrambled letters\",\"answer\":\"word\"}]}";
+
   const prompt = [
     `Generate ${request.questions} English OPIC practice quiz questions.`,
     `Topic: ${request.topic}`,
     `Difficulty: ${request.difficulty}`,
     request.additionalPrompt ? `Additional Instructions: ${request.additionalPrompt}` : "",
     `Allowed types: ${request.types.join(", ")}`,
+    imageInstructions,
     "Return JSON only with this shape:",
-    "{\"title\":\"string\",\"questions\":[{\"type\":\"mcq\",\"question\":\"string\",\"options\":[\"A\",\"B\",\"C\",\"D\"],\"answer\":\"string\"},{\"type\":\"unscramble\",\"question\":\"scrambled letters\",\"answer\":\"word\"}]}",
+    jsonShape,
     "Rules: MCQ answer must exactly match one option. Unscramble question must be scrambled lowercase letters only. Keep questions short and classroom friendly."
   ].filter(Boolean).join("\n");
 

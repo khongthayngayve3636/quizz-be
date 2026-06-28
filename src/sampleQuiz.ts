@@ -3,12 +3,16 @@ export type McqQuestion = {
   question: string;
   options: string[];
   answer: string;
+  imageKeyword?: string;
+  imageUrl?: string;
 };
 
 export type UnscrambleQuestion = {
   type: "unscramble";
   question: string;
   answer: string;
+  imageKeyword?: string;
+  imageUrl?: string;
 };
 
 export type QuizQuestion = McqQuestion | UnscrambleQuestion;
