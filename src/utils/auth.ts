@@ -1,7 +1,7 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 
-const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_SECRET: string = process.env.JWT_SECRET as string;
 if (!JWT_SECRET) {
   throw new Error("FATAL ERROR: JWT_SECRET environment variable is not defined.");
 }
