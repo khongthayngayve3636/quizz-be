@@ -51,7 +51,7 @@ export function normalizeGeneratedQuiz(raw: unknown, request: ReturnType<typeof 
     if (q.imageKeyword) {
       return {
         ...q,
-        imageUrl: `https://image.pollinations.ai/prompt/${encodeURIComponent(q.imageKeyword)}?width=800&height=400&nologo=true`
+        imageUrl: `https://loremflickr.com/800/400/${encodeURIComponent(q.imageKeyword)}?lock=${Math.floor(Math.random() * 1000)}`
       };
     }
     return q;
@@ -103,9 +103,9 @@ export function getGeminiOutputText(data: Record<string, unknown>) {
 export async function generateQuizWithGemini(request: ReturnType<typeof normalizeQuizRequest>) {
   let imageInstructions = "";
   if (request.includeImages) {
-    imageInstructions = "For ALL questions, generate a descriptive 'imageKeyword' field containing a highly detailed text-to-image prompt (e.g. 'a majestic lion in a dense green jungle, photorealistic').";
+    imageInstructions = "For ALL questions, generate a descriptive 'imageKeyword' field containing a SINGLE ENGLISH NOUN related to the question (e.g. 'lion', 'ocean', 'computer').";
   } else if (request.types.includes("unscramble")) {
-    imageInstructions = "For ONLY 'unscramble' type questions, generate a descriptive 'imageKeyword' field containing a highly detailed text-to-image prompt. Do NOT generate 'imageKeyword' for 'mcq' questions.";
+    imageInstructions = "For ONLY 'unscramble' type questions, generate a descriptive 'imageKeyword' field containing a SINGLE ENGLISH NOUN. Do NOT generate 'imageKeyword' for 'mcq' questions.";
   }
 
   const jsonShape = request.includeImages || request.types.includes("unscramble") 

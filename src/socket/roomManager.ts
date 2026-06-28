@@ -54,7 +54,8 @@ export function startQuestionCountdown(room: Room) {
   room.status = "countdown";
   io.to(room.code).emit("countdown-start", {
     roomCode: room.code,
-    seconds: 3
+    seconds: 3,
+    nextImageUrl: room.quiz[room.currentQuestion]?.imageUrl
   });
 
   room.timers.push(

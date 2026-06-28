@@ -40,12 +40,14 @@ export function publicQuestion(question: QuizQuestion) {
     return {
       type: question.type,
       question: question.question,
-      options: question.options
+      options: question.options,
+      ...(question.imageUrl ? { imageUrl: question.imageUrl } : {})
     };
   }
 
   return {
     type: question.type,
-    question: question.question
+    question: question.question,
+    ...(question.imageUrl ? { imageUrl: question.imageUrl } : {})
   };
 }

@@ -119,7 +119,11 @@ export function registerSocketHandlers(io: Server, socket: Socket) {
         emitPlayerList(room);
         
         if (room.status === "countdown") {
-          socket.emit("countdown-start", { roomCode: code, seconds: 3 });
+          socket.emit("countdown-start", { 
+            roomCode: code, 
+            seconds: 3,
+            nextImageUrl: room.quiz[room.currentQuestion]?.imageUrl 
+          });
         } else if (room.status === "question") {
           const question = getCurrentQuestion(room);
           const durationSeconds = 15 + (question.type === "unscramble" ? 5 : 0);

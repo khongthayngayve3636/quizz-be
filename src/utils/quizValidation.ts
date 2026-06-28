@@ -34,14 +34,18 @@ export function normalizeGeneratedQuestion(raw: unknown): QuizQuestion | null {
       type,
       question,
       options: uniqueOptions.slice(0, 4),
-      answer
+      answer,
+      ...(typeof source.imageKeyword === "string" ? { imageKeyword: source.imageKeyword } : {}),
+      ...(typeof source.imageUrl === "string" ? { imageUrl: source.imageUrl } : {})
     };
   }
 
   return {
     type,
     question,
-    answer
+    answer,
+    ...(typeof source.imageKeyword === "string" ? { imageKeyword: source.imageKeyword } : {}),
+    ...(typeof source.imageUrl === "string" ? { imageUrl: source.imageUrl } : {})
   };
 }
 
