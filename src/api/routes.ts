@@ -30,19 +30,36 @@ router.get("/api/leaderboard", async (_req, res) => {
   }
 });
 
-router.get("/api/quizzes", async (_req, res) => {
+router.get("/api/quizzes", async (req, res) => {
   if (!isMongoConnected()) {
-    res.json({ quizzes: [] });
+    res.json({ quizzes: [], total: 0, hasMore: false });
     return;
   }
 
   try {
-    const quizzes = await QuizModel.find()
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.max(1, Math.min(50, parseInt(req.query.limit as string) || 20));
+    const search = (req.query.search as string || "").trim();
+    
+    const query: any = {};
+    if (search) {
+      query.$or = [
+        { title: { $regex: search, $options: "i" } },
+        { topic: { $regex: search, $options: "i" } }
+      ];
+    }
+
+    const quizzes = await QuizModel.find(query)
       .sort({ createdAt: -1 })
-      .limit(20)
+      .skip((page - 1) * limit)
+      .limit(limit)
       .select("title topic difficulty questions createdAt")
       .lean();
-    res.json({ quizzes });
+      
+    const total = await QuizModel.countDocuments(query);
+    const hasMore = (page * limit) < total;
+
+    res.json({ quizzes, total, hasMore, page });
   } catch (error) {
     logger.error("Failed to fetch quizzes", error);
     res.status(500).json({ message: "Failed to fetch quizzes" });
